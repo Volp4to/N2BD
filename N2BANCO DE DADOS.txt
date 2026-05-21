@@ -70,13 +70,6 @@ create table if not exists respostas (
   constraint uq_sessoes_questoes unique (sessoes_id, questoes_id)
 );
 
--- =============================================
--- TRIGGERS
--- =============================================
-
--- ---------------------------------------------
--- TRIGGER 1 — cria perfil ao registrar usuário
--- ---------------------------------------------
 
 create or replace function handle_new_user()
 returns trigger language plpgsql security definer as $$
@@ -95,12 +88,6 @@ drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function handle_new_user();
-
-
--- ---------------------------------------------
--- TRIGGER 2 — atualiza contadores da sessão
---             ao registrar uma resposta
--- ---------------------------------------------
 
 create or replace function atualizar_contadores_sessao()
 returns trigger language plpgsql security definer as $$
