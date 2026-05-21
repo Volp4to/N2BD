@@ -1,0 +1,121 @@
+create table if not exists perfils (
+  id uuid primary key not null default uuid_generate_v4(),
+  name varchar not null,
+  função varchar not null default 'aluno',
+  criado_em timestamp not null default now(),
+  constraint chk_função check (função in ('aluno', 'administrador_escolar', 'administrador_global'))
+);
+
+create table if not exists escolas (
+  id uuid primary key not null default uuid_generate_v4(),
+  nome varchar not null,
+  cnpj varchar not null,
+  admin_id uuid not null,
+  created_at timestamp not null default now(),
+  constraint fk_escolas_admin
+    foreign key (admin_id)
+    references perfils(id)
+);
+
+create table if not exists matricula (
+  id uuid primary key not null default uuid_generate_v4(),
+  estudante_id uuid not null,
+  escola_id uuid not null,
+  created_at timestamp not null default now(),
+  constraint fk_estudante_id
+    foreign key (estudante_id)
+    references perfils(id),
+  constraint fk_escolas_id
+    foreign key (escola_id)
+    references escolas(id),
+  constraint uq_estudante_escola unique (estudante_id, escola_id)
+);
+
+create table if not exists questoes (
+  id uuid primary key not null default uuid_generate_v4(),
+  numero_questoes int not null,
+  enunciado jsonb not null,
+  alternativas jsonb not null,
+  created_at timestamp not null default now()
+);
+
+create table if not exists sessoes_simuladas (
+  id uuid primary key not null default uuid_generate_v4(),
+  estudante_id uuid not null,
+  status varchar not null default 'em_andamento',
+  total_questoes int not null default 0,
+  total_acertos int not null default 0,
+  iniciado_em timestamp not null default now(),
+  finalizado_em timestamp,
+  constraint fk_sessoes_estudante
+    foreign key (estudante_id)
+    references perfils(id),
+  constraint chk_status check (status in ('em_andamento', 'concluido')),
+  constraint chk_acertos check (total_acertos <= total_questoes)
+);
+
+create table if not exists respostas (
+  id uuid primary key not null default uuid_generate_v4(),
+  sessoes_id uuid not null,
+  questoes_id uuid not null,
+  alternativa_escolhida int not null,
+  correta boolean not null,
+  respondido_em timestamp not null default now(),
+  constraint fk_resposta_sessao
+    foreign key (sessoes_id)
+    references sessoes_simuladas(id),
+  constraint fk_resposta_questoes
+    foreign key (questoes_id)
+    references questoes(id) on delete cascade,
+  constraint uq_sessoes_questoes unique (sessoes_id, questoes_id)
+);
+
+-- =============================================
+-- TRIGGERS
+-- =============================================
+
+-- ---------------------------------------------
+-- TRIGGER 1 — cria perfil ao registrar usuário
+-- ---------------------------------------------
+
+create or replace function handle_new_user()
+returns trigger language plpgsql security definer as $$
+begin
+  insert into perfils (id, name, função)
+  values (
+    new.id,
+    coalesce(new.raw_user_meta_data->>'name', 'Novo Usuário'),
+    coalesce(new.raw_user_meta_data->>'função', 'aluno')
+  );
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function handle_new_user();
+
+
+-- ---------------------------------------------
+-- TRIGGER 2 — atualiza contadores da sessão
+--             ao registrar uma resposta
+-- ---------------------------------------------
+
+create or replace function atualizar_contadores_sessao()
+returns trigger language plpgsql security definer as $$
+begin
+  update sessoes_simuladas
+  set
+    total_questoes = total_questoes + 1,
+    total_acertos  = total_acertos  + (case when new.correta then 1 else 0 end)
+  where id = new.sessoes_id;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists on_resposta_inserida on respostas;
+create trigger on_resposta_inserida
+  after insert on respostas
+  for each row execute function atualizar_contadores_sessao();
