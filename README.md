@@ -1,1 +1,1 @@
-# N2BD
+GRUPO: Amanda Specht, Laura Meier, Mário Volpato
