@@ -1,3 +1,5 @@
+create extension if not exists "uuid-ossp";
+
 create table if not exists perfils (
   id uuid primary key not null default uuid_generate_v4(),
   name varchar not null,
@@ -9,7 +11,7 @@ create table if not exists perfils (
 create table if not exists escolas (
   id uuid primary key not null default uuid_generate_v4(),
   nome varchar not null,
-  cnpj varchar not null,
+  cnpj varchar not null unique,
   admin_id uuid not null,
   created_at timestamp not null default now(),
   constraint fk_escolas_admin
@@ -70,7 +72,6 @@ create table if not exists respostas (
   constraint uq_sessoes_questoes unique (sessoes_id, questoes_id)
 );
 
-
 create or replace function handle_new_user()
 returns trigger language plpgsql security definer as $$
 begin
@@ -85,6 +86,7 @@ end;
 $$;
 
 drop trigger if exists on_auth_user_created on auth.users;
+
 create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function handle_new_user();
@@ -95,7 +97,7 @@ begin
   update sessoes_simuladas
   set
     total_questoes = total_questoes + 1,
-    total_acertos  = total_acertos  + (case when new.correta then 1 else 0 end)
+    total_acertos  = total_acertos + (case when new.correta then 1 else 0 end)
   where id = new.sessoes_id;
 
   return new;
@@ -103,6 +105,150 @@ end;
 $$;
 
 drop trigger if exists on_resposta_inserida on respostas;
+
 create trigger on_resposta_inserida
   after insert on respostas
   for each row execute function atualizar_contadores_sessao();
+
+ALTER TABLE perfils ENABLE ROW LEVEL SECURITY;
+ALTER TABLE escolas ENABLE ROW LEVEL SECURITY;
+ALTER TABLE matricula ENABLE ROW LEVEL SECURITY;
+ALTER TABLE questoes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sessoes_simuladas ENABLE ROW LEVEL SECURITY;
+ALTER TABLE respostas ENABLE ROW LEVEL SECURITY;
+
+create policy "aluno_ver_proprio_perfil"
+  on perfils for select
+  using (auth.uid() = id);
+
+create policy "aluno_editar_proprio_perfil"
+  on perfils for update
+  using (auth.uid() = id);
+
+create policy "admin_escolar_ver_alunos_da_escola"
+  on perfils for select
+  using (
+    exists (
+      select 1 from matricula m
+      join escolas e on e.id = m.escola_id
+      where m.estudante_id = perfils.id
+        and e.admin_id = auth.uid()
+    )
+  );
+
+create policy "admin_global_acesso_total_perfils"
+  on perfils for all
+  using (
+    (select função from perfils where id = auth.uid()) = 'administrador_global'
+  );
+
+create policy "admin_escolar_ver_propria_escola"
+  on escolas for select
+  using (admin_id = auth.uid());
+
+create policy "admin_escolar_editar_propria_escola"
+  on escolas for update
+  using (admin_id = auth.uid());
+
+create policy "admin_global_acesso_total_escolas"
+  on escolas for all
+  using (
+    (select função from perfils where id = auth.uid()) = 'administrador_global'
+  );
+
+create policy "aluno_ver_proprias_matriculas"
+  on matricula for select
+  using (estudante_id = auth.uid());
+
+create policy "admin_escolar_gerenciar_matriculas"
+  on matricula for all
+  using (
+    exists (
+      select 1 from escolas e
+      where e.id = matricula.escola_id
+        and e.admin_id = auth.uid()
+    )
+  );
+
+create policy "admin_global_acesso_total_matriculas"
+  on matricula for all
+  using (
+    (select função from perfils where id = auth.uid()) = 'administrador_global'
+  );
+
+create policy "autenticado_ver_questoes"
+  on questoes for select
+  using (auth.uid() is not null);
+
+create policy "admin_global_gerenciar_questoes"
+  on questoes for all
+  using (
+    (select função from perfils where id = auth.uid()) = 'administrador_global'
+  );
+
+create policy "aluno_ver_proprias_sessoes"
+  on sessoes_simuladas for select
+  using (estudante_id = auth.uid());
+
+create policy "aluno_criar_sessao"
+  on sessoes_simuladas for insert
+  with check (estudante_id = auth.uid());
+
+create policy "aluno_atualizar_sessao"
+  on sessoes_simuladas for update
+  using (estudante_id = auth.uid());
+
+create policy "admin_escolar_ver_sessoes_alunos"
+  on sessoes_simuladas for select
+  using (
+    exists (
+      select 1 from matricula m
+      join escolas e on e.id = m.escola_id
+      where m.estudante_id = sessoes_simuladas.estudante_id
+        and e.admin_id = auth.uid()
+    )
+  );
+
+create policy "admin_global_acesso_total_sessoes"
+  on sessoes_simuladas for all
+  using (
+    (select função from perfils where id = auth.uid()) = 'administrador_global'
+  );
+
+create policy "aluno_ver_proprias_respostas"
+  on respostas for select
+  using (
+    exists (
+      select 1 from sessoes_simuladas ss
+      where ss.id = respostas.sessoes_id
+        and ss.estudante_id = auth.uid()
+    )
+  );
+
+create policy "aluno_inserir_resposta"
+  on respostas for insert
+  with check (
+    exists (
+      select 1 from sessoes_simuladas ss
+      where ss.id = respostas.sessoes_id
+        and ss.estudante_id = auth.uid()
+    )
+  );
+
+create policy "admin_escolar_ver_respostas_alunos"
+  on respostas for select
+  using (
+    exists (
+      select 1 from sessoes_simuladas ss
+      join matricula m on m.estudante_id = ss.estudante_id
+      join escolas e   on e.id = m.escola_id
+      where ss.id = respostas.sessoes_id
+        and e.admin_id = auth.uid()
+    )
+  );
+
+create policy "admin_global_acesso_total_respostas"
+  on respostas for all
+  using (
+    (select função from perfils where id = auth.uid()) = 'administrador_global'
+  );
